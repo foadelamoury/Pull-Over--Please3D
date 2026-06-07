@@ -1,7 +1,12 @@
+#pragma warning disable CS0618, CS0672
+
 using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+#if UNITY_2023_3_OR_NEWER
+using UnityEngine.Rendering.RenderGraphModule;
+#endif
 
 namespace PSXStyleShader
 {
@@ -97,6 +102,15 @@ namespace PSXStyleShader
 
         private sealed class Pass : ScriptableRenderPass
         {
+#if UNITY_2023_3_OR_NEWER
+            private class PassData
+            {
+                public Material material;
+                public TextureHandle source;
+                public TextureHandle destination;
+            }
+#endif
+
             private static readonly int TargetResolutionId = Shader.PropertyToID("_TargetResolution");
             private static readonly int UseScreenResolutionId = Shader.PropertyToID("_UseScreenResolution");
             private static readonly int ColorBitsId = Shader.PropertyToID("_ColorBits");
@@ -167,6 +181,58 @@ namespace PSXStyleShader
                 context.ExecuteCommandBuffer(cmd);
                 CommandBufferPool.Release(cmd);
             }
+
+#if UNITY_2023_3_OR_NEWER
+            public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
+            {
+                if (_material == null) return;
+
+                UniversalResourceData resourceData = frameData.Get<UniversalResourceData>();
+                UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
+
+                TextureHandle srcCamColor = resourceData.activeColorTexture;
+                if (!srcCamColor.IsValid()) return;
+
+                RenderTextureDescriptor desc = cameraData.cameraTargetDescriptor;
+                desc.depthBufferBits = 0;
+                desc.msaaSamples = 1;
+
+                TextureDesc texDesc = new TextureDesc(desc.width, desc.height);
+                texDesc.colorFormat = desc.graphicsFormat;
+                texDesc.depthBufferBits = 0;
+                texDesc.msaaSamples = MSAASamples.None;
+                texDesc.filterMode = FilterMode.Point;
+                texDesc.wrapMode = TextureWrapMode.Clamp;
+                texDesc.name = "_PSX_DitherTemp";
+
+                TextureHandle tempTex = renderGraph.CreateTexture(texDesc);
+
+                int w = Mathf.Max(1, _targetResolution.x);
+                int h = Mathf.Max(1, _targetResolution.y);
+
+                _material.SetVector(TargetResolutionId, new Vector4(w, h, 0f, 0f));
+                _material.SetFloat(UseScreenResolutionId, 0f);
+                _material.SetFloat(ColorBitsId, Mathf.Clamp(_colorBits, 1f, 8f));
+                _material.SetFloat(DitherStrengthId, Mathf.Clamp01(_ditherStrength));
+
+                using (var builder = renderGraph.AddUnsafePass<PassData>("PSX Downscale Dither", out var passData))
+                {
+                    passData.material = _material;
+                    passData.source = srcCamColor;
+                    passData.destination = tempTex;
+
+                    builder.UseTexture(srcCamColor, AccessFlags.ReadWrite);
+                    builder.UseTexture(tempTex, AccessFlags.ReadWrite);
+
+                    builder.SetRenderFunc((PassData data, UnsafeGraphContext context) =>
+                    {
+                        CommandBuffer cmd = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
+                        cmd.Blit(data.source, data.destination, data.material, 0);
+                        cmd.Blit(data.destination, data.source);
+                    });
+                }
+            }
+#endif
 
             public void Dispose()
             {

@@ -2,8 +2,8 @@ using UnityEngine;
 
 public class CarController : MonoBehaviour
 {
-    public float motorForce = 100f; // Remember to increase this in the Inspector!
-    public float brakeForce = 1000f; // Remember to increase this in the Inspector!
+    public float motorForce = 100f; 
+    public float brakeForce = 1000f;
     public float maxSteerAngle = 30f;
 
     [Header("Input Settings")]
