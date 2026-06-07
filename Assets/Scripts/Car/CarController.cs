@@ -20,11 +20,17 @@ public class CarController : MonoBehaviour
     public Transform frontRightWheelTransform;
     public Transform rearWheelTransform;
 
+    [Header("Stability Settings")]
+    public Vector3 centerOfMassOffset = new Vector3(0, -1.0f, 0);
+    public float antiRollForce = 5000f; // Force to keep the car from flipping
+
     private float horizontalInput;
     private float verticalInput;
     private float currentSteerAngle;
     private float currentBrakeForce;
     private bool isBraking;
+    
+    private Rigidbody carRigidbody;
 
     void Start()
     {
@@ -32,8 +38,10 @@ public class CarController : MonoBehaviour
         {
             inputHandler = GetComponent<CarInputHandler>();
         }
+        
+        carRigidbody = GetComponent<Rigidbody>();
         // Lowering the center of mass keeps the car from flipping over easily
-        GetComponent<Rigidbody>().centerOfMass = new Vector3(0, -1f, 0);
+        carRigidbody.centerOfMass = centerOfMassOffset;
     }
 
     private void FixedUpdate()
@@ -42,6 +50,35 @@ public class CarController : MonoBehaviour
         HandleMotor();
         HandleSteering();
         ApplyBraking();
+        ApplyAntiRoll();
+    }
+
+    void ApplyAntiRoll()
+    {
+        ApplyAntiRollToAxle(frontLeftWheelCollider, frontRightWheelCollider);
+        ApplyAntiRollToAxle(rearLeftWheelCollider, rearRightWheelCollider);
+    }
+
+    void ApplyAntiRollToAxle(WheelCollider leftWheel, WheelCollider rightWheel)
+    {
+        WheelHit hit;
+        float travelL = 1.0f;
+        float travelR = 1.0f;
+
+        bool groundedL = leftWheel.GetGroundHit(out hit);
+        if (groundedL)
+            travelL = (-leftWheel.transform.InverseTransformPoint(hit.point).y - leftWheel.radius) / leftWheel.suspensionDistance;
+
+        bool groundedR = rightWheel.GetGroundHit(out hit);
+        if (groundedR)
+            travelR = (-rightWheel.transform.InverseTransformPoint(hit.point).y - rightWheel.radius) / rightWheel.suspensionDistance;
+
+        float antiRollVal = (travelL - travelR) * antiRollForce;
+
+        if (groundedL)
+            carRigidbody.AddForceAtPosition(leftWheel.transform.up * -antiRollVal, leftWheel.transform.position);
+        if (groundedR)
+            carRigidbody.AddForceAtPosition(rightWheel.transform.up * antiRollVal, rightWheel.transform.position);
     }
 
     private void LateUpdate()
