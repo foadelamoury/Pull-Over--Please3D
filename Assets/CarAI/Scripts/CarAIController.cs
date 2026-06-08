@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using UnityEngine;
+using static UnityEditor.FilePathAttribute;
 
 public class CarAIController : MonoBehaviour
 {
@@ -58,11 +59,34 @@ public class CarAIController : MonoBehaviour
     [Tooltip("Breaking threshold. Tip: make it bigger than the acceleration threshold so that the car can break faster.")]
     public float breaking = 1000f;
 
+    [Header("Stability Settings")]
+    public Vector3 centerOfMassOffset = new Vector3(0, -1.0f, 0);
+    public float antiRollForce = 5000f;
+
+    [Header("Reverse Settings")]
+    public float waitBeforeReverse = 2f;
+    public float reverseDuration = 2f;
+
     //Private variables
+    private float stuckTimer = 0f;
+    private float reverseTimer = 0f;
+    private bool isReversing = false;
+    private float reverseSteerDirection = 1f;
+
     private Stopwatch stopwatch = new Stopwatch();
     private Vector3 lastPos;
     private float steerAngle = 0f;
     private bool flipOverCheck = false;
+    private Rigidbody carRigidbody;
+
+    private void Start()
+    {
+        carRigidbody = GetComponent<Rigidbody>();
+        if (carRigidbody != null)
+        {
+            carRigidbody.centerOfMass = centerOfMassOffset;
+        }
+    }
 
     private void FixedUpdate()
     {
@@ -77,6 +101,8 @@ public class CarAIController : MonoBehaviour
         //Search for checkpoints
 
         SearchForCheckpoints();
+
+        ApplyAntiRoll();
 
         if(despawnForFlippingOver && !flipOverCheck)
         {
@@ -103,8 +129,10 @@ public class CarAIController : MonoBehaviour
 
             if(deleteCar)
             {
-                UnityEngine.Debug.Log("Car " + gameObject.name + " destroyed for flipping over.");
-                Destroy(gameObject);
+                //UnityEngine.Debug.Log("Car " + gameObject.name + " destroyed for flipping over.");
+                //Destroy(gameObject);
+                // check
+                gameObject.transform.rotation = new Quaternion(0, transform.rotation.y, 0,0); 
             }
         }
 
@@ -118,12 +146,42 @@ public class CarAIController : MonoBehaviour
     private bool isCarFlipedOver()
     {
 
-        if(transform.rotation.eulerAngles.z > 30f || transform.rotation.eulerAngles.z < -30f)
+        if(transform.rotation.eulerAngles.z > 30f || transform.rotation.eulerAngles.z < -30f || transform.rotation.eulerAngles.x > 30f || transform.rotation.eulerAngles.x < -30f)
         {
             return true;
         }
 
         return false;
+    }
+
+    private void ApplyAntiRoll()
+    {
+        ApplyAntiRollToAxle(frontLeftCollider, frontRightCollider);
+        ApplyAntiRollToAxle(rearLeftCollider, rearRightCollider);
+    }
+
+    private void ApplyAntiRollToAxle(WheelCollider leftWheel, WheelCollider rightWheel)
+    {
+        if (carRigidbody == null) return;
+
+        WheelHit hit;
+        float travelL = 1.0f;
+        float travelR = 1.0f;
+
+        bool groundedL = leftWheel.GetGroundHit(out hit);
+        if (groundedL)
+            travelL = (-leftWheel.transform.InverseTransformPoint(hit.point).y - leftWheel.radius) / leftWheel.suspensionDistance;
+
+        bool groundedR = rightWheel.GetGroundHit(out hit);
+        if (groundedR)
+            travelR = (-rightWheel.transform.InverseTransformPoint(hit.point).y - rightWheel.radius) / rightWheel.suspensionDistance;
+
+        float antiRollVal = (travelL - travelR) * antiRollForce;
+
+        if (groundedL)
+            carRigidbody.AddForceAtPosition(leftWheel.transform.up * -antiRollVal, leftWheel.transform.position);
+        if (groundedR)
+            carRigidbody.AddForceAtPosition(rightWheel.transform.up * antiRollVal, rightWheel.transform.position);
     }
 
     private void WheelUpdate(Transform transform, WheelCollider collider)
@@ -209,6 +267,26 @@ public class CarAIController : MonoBehaviour
     {
         if (CheckPointSearch && isCarControlledByAI)
         {
+            if (isReversing)
+            {
+                reverseTimer += Time.fixedDeltaTime;
+                
+                // Steer in the opposite direction
+                Turn(-steerAngle * reverseSteerDirection);
+                
+                // Accelerate backwards
+                Accelerate(-acceleration);
+                Break(0);
+                
+                if (reverseTimer >= reverseDuration)
+                {
+                    isReversing = false;
+                    reverseTimer = 0f;
+                    stuckTimer = 0f;
+                }
+                return;
+            }
+
             Vector3 nextCheckpointRelative = transform.InverseTransformPoint(nextCheckpoint.position);
 
             steerAngle = nextCheckpointRelative.x / nextCheckpointRelative.magnitude;
@@ -238,13 +316,34 @@ public class CarAIController : MonoBehaviour
                     objectInFront++;
             }
            
-            if (objectInFront > 0)
+            if (objectInFront > 0 || (kmh <= 1 && speedLimit > 0))
             {
-                SetSpeed(0);
-                objectDetected = true;
+                stuckTimer += Time.fixedDeltaTime;
+                
+                if (stuckTimer >= waitBeforeReverse)
+                {
+                    isReversing = true;
+                    reverseSteerDirection = UnityEngine.Random.value > 0.5f ? 1f : -1f; 
+                    reverseTimer = 0f;
+                    stuckTimer = 0f;
+                }
+                else if (objectInFront > 0)
+                {
+                    SetSpeed(0);
+                    objectDetected = true;
+                }
+                else
+                {
+                    objectDetected = false;
+                    int speed = speedLimit + recklessnessThreshold;
+                    if(speedLimit == 0) speed = 0;
+                    if(speed == 0) speed = speedLimit;
+                    SetSpeed(speed);
+                }
             }
             else
             {
+                stuckTimer = 0f;
                 objectDetected = false;
                 int speed = speedLimit + recklessnessThreshold;
                 if(speedLimit == 0)
